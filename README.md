@@ -15,7 +15,7 @@ dsh plugin --profile web add dsh-remote-plugin@0.4.4
 git 源安装（等价）：
 
 ```sh
-dsh plugin --profile web add "github:Blank-not-black/dsh-Remote#main&path:/packages/plugin"
+dsh plugin --profile web add "github:Blank-not-black/dsh-remote-plugin#main"
 ```
 
 ## 网关
