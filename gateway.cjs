@@ -255,12 +255,28 @@ function kickDevice(ip) {
 }
 
 // ---------- GitHub/镜像 更新检查 ----------
+function parseVersion(v) {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(String(v || '').trim())
+  if (!m) return { core: [0, 0, 0], pre: null }
+  return { core: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] || null }
+}
 function cmpVersion(a, b) {
-  const pa = String(a || '').split('.').map(Number)
-  const pb = String(b || '').split('.').map(Number)
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const d = (pa[i] || 0) - (pb[i] || 0)
+  const pa = parseVersion(a), pb = parseVersion(b)
+  for (let i = 0; i < 3; i++) {
+    const d = pa.core[i] - pb.core[i]
     if (d) return d
+  }
+  if (!pa.pre && !pb.pre) return 0
+  if (!pa.pre) return 1
+  if (!pb.pre) return -1
+  const sa = String(pa.pre).split('.'), sb = String(pb.pre).split('.')
+  for (let i = 0; i < Math.max(sa.length, sb.length); i++) {
+    const x = sa[i] ?? '', y = sb[i] ?? ''
+    if (x === y) continue
+    const nx = /^\d+$/.test(x), ny = /^\d+$/.test(y)
+    if (nx && ny) { const d = Number(x) - Number(y); if (d) return d }
+    else if (nx !== ny) return nx ? -1 : 1
+    else { const d = x.localeCompare(y); if (d) return d }
   }
   return 0
 }
@@ -394,6 +410,26 @@ function serveStatic(req, res, url) {
   }
   if (pathname === '/') pathname = '/index.html'
   if (pathname === '/admin') pathname = '/admin.html'
+  // 兼容旧版 App(版本比较不认 -rc): 无 local 参数的请求把 0.5.2-rc.1 显示为 0.5.2,
+  // 引导升级到新 APK; 新 App 带 ?local= 拿到真实 rc 版本, 不会循环提示。
+  if (pathname === '/update.json') {
+    fs.readFile(path.join(PUBLIC_DIR, 'update.json'), 'utf8', (err, raw) => {
+      if (err) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('404 Not Found')
+        return
+      }
+      let json = {}
+      try { json = JSON.parse(raw) } catch {}
+      if (!url.searchParams.has('local')) {
+        json = { ...json, version: String(json.version || '').replace(/-.*$/, '') }
+      }
+      cors(res)
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(JSON.stringify(json))
+    })
+    return
+  }
   const apkOverride = pathname === '/dsh-remote.apk'
   const baseDir = apkOverride ? path.join(ROOT, 'apk') : PUBLIC_DIR
   const filePath = path.normalize(path.join(baseDir, pathname))
@@ -451,6 +487,7 @@ function serveAdminApi(req, res, url) {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({
         ok: true,
+        mode: 'gateway',
         version: VERSION,
         pid: process.pid,
         hostname: os.hostname(),
