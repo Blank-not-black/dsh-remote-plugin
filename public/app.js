@@ -38,7 +38,11 @@ function writeHistoryCache(cache) {
 const state = {
   token: '',
   server: '',             // 当前生效的网关地址, 空 = 同源(浏览器模式)
-  servers: [],            // 备选服务器列表(局域网/远程多地址)
+  servers: [],            // 服务器列表: [{id,url,note,group}]
+  groups: ['默认'],       // 组名列表(顺序保留)
+  activeGroup: '默认',    // 当前连接组
+  autoSelect: { '默认': true },   // 组内自动测速选优 / 手动指定
+  groupActive: { '默认': '' },    // 每组当前生效的 server id(手动模式)
   serverLatency: {},      // url -> 最近一次 /health 测速毫秒数
   selectingServer: false, // 防重入: 测速/切换中
   sessions: [],
@@ -237,29 +241,89 @@ function authFailure() {
   $('token-desc').textContent = t('token.invalid')
 }
 
-/* ---------------- 多服务器 + 自动选优 ---------------- */
-function loadServers() {
+/* ---------------- 多服务器分组管理 + 自动选优 ---------------- */
+function newServerId() {
+  return 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+}
+
+function ensureGroup(name) {
+  if (!name) name = '默认'
+  if (!state.groups.includes(name)) state.groups.push(name)
+  if (!(name in state.autoSelect)) state.autoSelect[name] = true
+  if (!(name in state.groupActive)) state.groupActive[name] = ''
+  return name
+}
+
+function groupServers(group) {
+  return state.servers.filter(s => s.group === group)
+}
+
+function activeServers() {
+  return groupServers(state.activeGroup)
+}
+
+/** 旧结构迁移: servers(string[]) + server/activeServer -> 新分组结构, 幂等(仅当 servers-v2 不存在时执行)。 */
+function migrateServersV1() {
+  if (LS.get('servers-v2', null) !== null) return
   let arr = null
   try { arr = JSON.parse(LS.get('servers', '')) } catch {}
   if (!Array.isArray(arr)) {
     const legacy = LS.get('server', '')
     arr = legacy ? [legacy] : []
   }
-  state.servers = arr.map(s => String(s || '').trim().replace(/\/+$/, ''))
+  const urls = arr.map(s => String(s || '').trim().replace(/\/+$/, ''))
     .filter(s => /^https?:\/\//i.test(s))
+  state.servers = urls.map((url, i) => ({ id: 's' + (i + 1), url, note: '', group: '默认' }))
+  state.groups = ['默认']
+  state.activeGroup = '默认'
+  state.autoSelect = { '默认': true }
+  state.groupActive = { '默认': '' }
   const active = LS.get('activeServer', '')
-  if (active === 'origin') state.server = ''                       // 浏览器里明确选了同源页面
-  else state.server = state.servers.includes(active) ? active : (state.servers[0] || '')
+  if (active === 'origin') {
+    state.server = ''
+  } else {
+    const hit = state.servers.find(s => s.url === active)
+    state.server = hit ? hit.url : (state.servers[0]?.url || '')
+    state.groupActive['默认'] = hit ? hit.id : (state.servers[0]?.id || '')
+  }
+  saveServers()
+}
+
+function loadServers() {
+  let data = null
+  try { data = JSON.parse(LS.get('servers-v2', '')) } catch {}
+  if (!data || !Array.isArray(data.servers)) {
+    migrateServersV1()
+    return
+  }
+  state.servers = data.servers.filter(s => s && typeof s.url === 'string')
+    .map(s => ({ id: s.id || newServerId(), url: s.url.replace(/\/+$/, ''), note: s.note || '', group: s.group || '默认' }))
+  state.groups = Array.isArray(data.groups) && data.groups.length ? data.groups : ['默认']
+  state.activeGroup = state.groups.includes(data.activeGroup) ? data.activeGroup : '默认'
+  state.autoSelect = data.autoSelect || {}
+  state.groupActive = data.groupActive || {}
+  ensureGroup('默认')
+  for (const s of state.servers) ensureGroup(s.group)
+  if (!state.groups.includes(state.activeGroup)) state.activeGroup = '默认'
+  // 恢复当前连接地址
+  const manual = state.groupActive[state.activeGroup]
+  const manualSrv = manual ? state.servers.find(s => s.id === manual) : null
+  state.server = manualSrv ? manualSrv.url : (activeServers()[0]?.url || '')
 }
 
 function saveServers() {
-  LS.set('servers', JSON.stringify(state.servers))
-  LS.set('server', state.server)          // 兼容旧字段
-  LS.set('activeServer', state.server === '' && !CAP?.isNativePlatform?.() ? 'origin' : state.server)
+  LS.set('servers-v2', JSON.stringify({
+    servers: state.servers,
+    groups: state.groups,
+    activeGroup: state.activeGroup,
+    autoSelect: state.autoSelect,
+    groupActive: state.groupActive,
+  }))
+  // 旧 key 保留但不再写入(回滚兼容)
 }
 
 function serverCandidates() {
-  const list = [...state.servers]
+  const list = activeServers().map(s => s.url)
   // 浏览器控制台: 当前页面(同源网关)也作为候选, 通常 0 跳内最快
   if (!CAP?.isNativePlatform?.() && location.origin && !list.includes(location.origin)) list.push(location.origin)
   return list
@@ -287,21 +351,44 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
   try {
     if (!silent) toast(t('speed.testing'))
     const candidates = serverCandidates()
-    for (const u of candidates) state.serverLatency[u] = await pingServer(u)
-    const best = candidates
-      .filter(u => Number.isFinite(state.serverLatency[u]))
-      .sort((a, b) => state.serverLatency[a] - state.serverLatency[b])[0]
-    const sameOrigin = !CAP?.isNativePlatform?.() && best === location.origin
-    // 全部不可达时保持原服务器, 不硬切到空(同源)地址
-    const chosen = best ? (sameOrigin && !state.servers.includes(best) ? '' : best) : (state.server || '')
+    let chosen = ''
+    let best = null
+    let ms = Infinity
+
+    if (state.autoSelect[state.activeGroup] !== false) {
+      for (const u of candidates) state.serverLatency[u] = await pingServer(u)
+      best = candidates
+        .filter(u => Number.isFinite(state.serverLatency[u]))
+        .sort((a, b) => state.serverLatency[a] - state.serverLatency[b])[0] || null
+      const sameOrigin = !CAP?.isNativePlatform?.() && best === location.origin
+      chosen = best ? (sameOrigin && !activeServers().some(s => s.url === best) ? '' : best) : (state.server || '')
+      ms = best ? state.serverLatency[best] : Infinity
+    } else {
+      const manual = state.groupActive[state.activeGroup]
+      const manualSrv = manual ? state.servers.find(s => s.id === manual) : null
+      chosen = manualSrv ? manualSrv.url : (activeServers()[0]?.url || '')
+      if (chosen && !silent) {
+        state.serverLatency[chosen] = await pingServer(chosen)
+        ms = state.serverLatency[chosen]
+      }
+    }
+
     renderServers()
     if (chosen !== state.server) {
       state.server = chosen
+      if (state.autoSelect[state.activeGroup] !== false && best) {
+        const srv = state.servers.find(s => s.url === best)
+        if (srv) state.groupActive[state.activeGroup] = srv.id
+      }
       saveServers()
-      if (!silent) toast(t('speed.switched', { url: chosen || t('speed.origin'), ms: state.serverLatency[best] }), 'ok')
+      if (!silent) {
+        if (chosen) toast(t('speed.switched', { url: chosen, ms: Number.isFinite(ms) ? ms : 0 }), 'ok')
+        else toast(t('speed.switchedOrigin'), 'ok')
+      }
       if (reconnect && state.token) { openStreams(); refreshAll() }
     } else if (!silent) {
       if (best) toast(t('speed.alreadyBest', { url: chosen || t('speed.origin'), ms: state.serverLatency[best] }), 'ok')
+      else if (chosen) toast(t('speed.manualUsing', { url: chosen, ms: Number.isFinite(ms) ? ms : '—' }), 'ok')
       else toast(t('speed.allDown'), 'err')
     }
     return chosen
@@ -310,27 +397,119 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
   }
 }
 
+function serverTitle(s) {
+  return s.note || s.url
+}
+
+function renderGroupSelect() {
+  const label = $('group-select-label')
+  const menu = $('group-select-menu')
+  if (!label || !menu) return
+  label.textContent = state.activeGroup
+  menu.innerHTML = state.groups.map(g =>
+    `<button type="button" class="group-option ${g === state.activeGroup ? 'current' : ''}" data-group-option="${esc(g)}">${esc(g)}${g === state.activeGroup ? ' ✓' : ''}</button>`).join('')
+  menu.querySelectorAll('[data-group-option]').forEach(b =>
+    b.addEventListener('click', () => {
+      closeGroupMenu()
+      if (b.dataset.groupOption !== state.activeGroup) switchGroup(b.dataset.groupOption)
+    }))
+}
+
+function toggleGroupMenu() {
+  const menu = $('group-select-menu')
+  if (!menu) return
+  menu.classList.toggle('hidden')
+}
+
+function closeGroupMenu() {
+  const menu = $('group-select-menu')
+  if (menu) menu.classList.add('hidden')
+}
+
 function renderServers() {
   const box = $('server-list')
   if (!box) return
-  if (!state.servers.length) {
-    box.innerHTML = '<div class="server-empty">' + t('servers.empty') + '</div>'
-  } else {
-    box.innerHTML = state.servers.map(u => {
-      const ms = state.serverLatency[u]
-      let badge = '<span class="server-badge">' + t('servers.untested') + '</span>'
-      if (Number.isFinite(ms)) badge = `<span class="server-badge ${u === state.server ? 'good' : ''}">${ms}ms${u === state.server ? t('servers.current') : ''}</span>`
-      else if (ms !== undefined) badge = '<span class="server-badge bad">' + t('servers.unreachable') + '</span>'
-      return `<div class="server-row ${u === state.server ? 'active' : ''}">
-        <span class="server-url">${esc(u)}</span>${badge}
-        <button class="server-del" data-del="${esc(u)}" aria-label="${t('servers.delete')}">✕</button>
-      </div>`
-    }).join('')
-    box.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => removeServer(b.dataset.del)))
-  }
+  renderGroupSelect()
+  const groupsHtml = state.groups.map(g => {
+    const list = groupServers(g)
+    const auto = state.autoSelect[g] !== false
+    const activeManual = state.groupActive[g] || ''
+    return `<div class="srv-group" data-group="${esc(g)}">
+      <div class="srv-group-head">
+        <button class="srv-group-name" data-group-name="${esc(g)}">${g === state.activeGroup ? '▾' : '▸'} ${esc(g)} <span class="srv-group-count">${list.length}</span></button>
+        <button class="srv-group-speed mini-btn" data-speed-group="${esc(g)}" title="${t('groups.speedTest')}">⚡</button>
+        <label class="switch small" title="${t('groups.autoSelect')}">
+          <input type="checkbox" data-auto-group="${esc(g)}" ${auto ? 'checked' : ''}>
+          <span class="slider"></span>
+        </label>
+        ${g !== '默认' ? `<button class="srv-group-del" data-del-group="${esc(g)}" title="${t('groups.delete')}">✕</button>` : ''}
+      </div>
+      <div class="srv-group-body ${g === state.activeGroup ? '' : 'hidden'}">
+        ${list.map(s => {
+          const ms = state.serverLatency[s.url]
+          let badge = `<span class="server-badge">${t('servers.untested')}</span>`
+          if (Number.isFinite(ms)) badge = `<span class="server-badge ${s.url === state.server ? 'good' : ''}">${ms}ms${s.url === state.server ? t('servers.current') : ''}</span>`
+          else if (ms !== undefined) badge = '<span class="server-badge bad">' + t('servers.unreachable') + '</span>'
+          const activeInGroup = auto ? s.url === state.server : s.id === activeManual
+          return `<div class="server-row ${activeInGroup ? 'active' : ''}" data-use-server="${esc(s.id)}">
+            <span class="server-main"><span class="server-note">${esc(serverTitle(s))}</span>${s.note ? `<span class="server-url">${esc(s.url)}</span>` : ''}</span>${badge}
+            <button class="server-edit" data-edit-server="${esc(s.id)}" title="${t('servers.edit')}">✎</button>
+            <button class="server-del" data-del-server="${esc(s.id)}" aria-label="${t('servers.delete')}">✕</button>
+          </div>`
+        }).join('') || '<div class="server-empty">' + t('groups.noServer') + '</div>'}
+      </div>
+    </div>`
+  }).join('')
+
+  box.innerHTML = state.servers.length
+    ? groupsHtml
+    : '<div class="server-empty">' + t('servers.empty') + '</div>'
+
+  box.querySelectorAll('[data-group-name]').forEach(b => {
+    b.title = t('groups.switchHint')
+    b.addEventListener('click', () => switchGroup(b.dataset.groupName))
+    b.addEventListener('dblclick', () => renameGroup(b.dataset.groupName))
+  })
+  box.querySelectorAll('[data-speed-group]').forEach(b => b.addEventListener('click', () => { state.activeGroup = b.dataset.speedGroup; saveServers(); selectFastestServer({ silent: false }) }))
+  box.querySelectorAll('[data-auto-group]').forEach(chk => chk.addEventListener('change', (e) => {
+    const g = e.target.dataset.autoGroup
+    state.autoSelect[g] = e.target.checked
+    saveServers()
+    if (g === state.activeGroup) selectFastestServer({ silent: false })
+    toast(t(e.target.checked ? 'groups.autoOn' : 'groups.autoOff', { group: g }), 'ok')
+  }))
+  box.querySelectorAll('[data-del-group]').forEach(b => b.addEventListener('click', () => deleteGroup(b.dataset.delGroup)))
+  box.querySelectorAll('[data-del-server]').forEach(b => b.addEventListener('click', (e) => { e.stopPropagation(); removeServer(b.dataset.delServer) }))
+  box.querySelectorAll('[data-edit-server]').forEach(b => b.addEventListener('click', (e) => { e.stopPropagation(); editServer(b.dataset.editServer) }))
+  box.querySelectorAll('[data-use-server]').forEach(row => row.addEventListener('click', (e) => {
+    if (e.target.closest('button')) return
+    const id = row.dataset.useServer
+    const s = state.servers.find(x => x.id === id)
+    if (!s) return
+    const group = s.group
+    if (state.autoSelect[group] !== false) {
+      // 自动选择模式下点击条目 = 编辑
+      editServer(id)
+      return
+    }
+    // 手动模式: 点击条目 = 选中该服务器连接
+    state.groupActive[group] = id
+    state.activeGroup = group
+    state.server = s.url
+    saveServers()
+    renderServers()
+    toast(t('servers.manualSelected', { url: serverTitle(s) }), 'ok')
+    if (state.token) { openStreams(); refreshAll() }
+  }))
+
+  const cur = state.servers.find(s => s.url === state.server)
+  const curNote = cur ? (cur.note || cur.url) : ''
+  const curGroup = cur ? cur.group : state.activeGroup
+  const curMs = state.serverLatency[state.server]
   $('server-desc').textContent = state.server
-    ? t('servers.currentDesc', { url: state.server })
+    ? t('servers.currentDescGroup', { group: curGroup, url: curNote, ms: Number.isFinite(curMs) ? curMs + 'ms' : '—' })
     : (CAP?.isNativePlatform?.() ? t('servers.notSet') : t('servers.defaultDesc'))
+  updateConn()
 }
 
 async function addServer() {
@@ -343,8 +522,9 @@ async function addServer() {
   } catch {
     return toast(t('servers.badProtocol'), 'err')
   }
-  if (state.servers.includes(raw)) return toast(t('servers.duplicate'))
-  state.servers.push(raw)
+  if (state.servers.some(s => s.url === raw)) return toast(t('servers.duplicate'))
+  let note = prompt(t('servers.promptNote'), '') || ''
+  state.servers.push({ id: newServerId(), url: raw, note: note.trim(), group: state.activeGroup })
   saveServers()
   if (input) input.value = ''
   renderServers()
@@ -352,16 +532,101 @@ async function addServer() {
   if (state.token) selectFastestServer({ silent: false })
 }
 
-function removeServer(url) {
-  state.servers = state.servers.filter(s => s !== url)
-  const wasActive = state.server === url
-  if (wasActive) state.server = ''
+function editServer(id) {
+  const s = state.servers.find(x => x.id === id)
+  if (!s) return
+  const raw = (prompt(t('servers.promptEditUrl'), s.url) || '').trim().replace(/\/+$/, '')
+  if (!raw) return
+  try {
+    const u = new URL(raw)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('bad')
+  } catch {
+    return toast(t('servers.badProtocol'), 'err')
+  }
+  if (state.servers.some(x => x.id !== id && x.url === raw)) return toast(t('servers.duplicate'))
+  const note = prompt(t('servers.promptEditNote', { url: raw }), s.note || '')
+  if (note === null) return
+  const group = prompt(t('servers.promptEditGroup'), s.group || '默认')
+  if (group === null) return
+  const wasActive = state.server === s.url
+  s.url = raw
+  s.note = note.trim()
+  s.group = ensureGroup(group.trim() || '默认')
+  if (wasActive) state.server = raw
+  saveServers()
+  renderServers()
+  toast(t('servers.edited'), 'ok')
+  if (wasActive && state.token) selectFastestServer({ silent: true })
+}
+
+function removeServer(id) {
+  const s = state.servers.find(x => x.id === id)
+  if (!s) return
+  state.servers = state.servers.filter(x => x.id !== id)
+  const wasActive = state.server === s.url
+  // 清理该组手动指定
+  for (const g of state.groups) if (state.groupActive[g] === id) state.groupActive[g] = ''
   saveServers()
   renderServers()
   if (wasActive) {
     toast(t('servers.removedActive'))
     selectFastestServer({ silent: true })
   }
+}
+
+/* ---------------- 组管理 ---------------- */
+function switchGroup(name) {
+  if (!state.groups.includes(name)) return
+  state.activeGroup = name
+  saveServers()
+  renderServers()
+  toast(t('groups.switched', { group: name }), 'ok')
+  selectFastestServer({ silent: false })
+}
+
+function addGroup() {
+  const name = (prompt(t('groups.promptAdd')) || '').trim()
+  if (!name) return
+  if (state.groups.includes(name)) return toast(t('groups.duplicate'), 'err')
+  ensureGroup(name)
+  state.activeGroup = name
+  saveServers()
+  renderServers()
+  toast(t('groups.added', { group: name }), 'ok')
+}
+
+function renameGroup(oldName) {
+  if (oldName === '默认') return
+  const name = (prompt(t('groups.promptRename', { group: oldName }), oldName) || '').trim()
+  if (!name || name === oldName) return
+  if (state.groups.includes(name)) return toast(t('groups.duplicate'), 'err')
+  const idx = state.groups.indexOf(oldName)
+  state.groups[idx] = name
+  for (const s of state.servers) if (s.group === oldName) s.group = name
+  if (state.activeGroup === oldName) state.activeGroup = name
+  if (name in state.autoSelect) delete state.autoSelect[name]
+  state.autoSelect[name] = state.autoSelect[oldName] !== false
+  delete state.autoSelect[oldName]
+  state.groupActive[name] = state.groupActive[oldName] || ''
+  delete state.groupActive[oldName]
+  saveServers()
+  renderServers()
+  toast(t('groups.renamed', { group: name }), 'ok')
+}
+
+function deleteGroup(name) {
+  if (name === '默认') return toast(t('groups.cannotDeleteDefault'), 'err')
+  if (!state.groups.includes(name)) return
+  if (!confirm(t('groups.confirmDelete', { group: name }))) return
+  state.groups = state.groups.filter(g => g !== name)
+  for (const s of state.servers) if (s.group === name) s.group = '默认'
+  delete state.autoSelect[name]
+  delete state.groupActive[name]
+  if (state.activeGroup === name) state.activeGroup = '默认'
+  saveServers()
+  renderServers()
+  toast(t('groups.deleted'), 'ok')
+  if (state.token) selectFastestServer({ silent: true })
 }
 
 /* ---------------- 事件流 (WebSocket) ---------------- */
@@ -1935,6 +2200,42 @@ function notify(title, body) {
   } catch {}
 }
 
+/* ---------------- 峰谷计费提醒(每天 9/12/14/18 点本地通知) ---------------- */
+const PEAK_REMIND_NOTIFS = [
+  { id: 8801, hour: 9, periodKey: 'peak0912', enterKey: 'enterPeak' },
+  { id: 8802, hour: 12, periodKey: 'off1214', enterKey: 'enterOff' },
+  { id: 8803, hour: 14, periodKey: 'peak1418', enterKey: 'enterPeak' },
+  { id: 8804, hour: 18, periodKey: 'off1809', enterKey: 'enterOff' },
+]
+function peakRemindOn() { return LS.get('peakRemind', '0') === '1' }
+
+async function schedulePeakReminders() {
+  if (!CAP?.isNativePlatform?.()) return false
+  const L = CAP.Plugins?.LocalNotifications
+  if (!L?.schedule) return false
+  try {
+    await L.schedule({
+      notifications: PEAK_REMIND_NOTIFS.map(n => ({
+        id: n.id,
+        title: 'DSH Remote',
+        body: `${t('peakRemind.' + n.enterKey)} · ${t('peakRemind.' + n.periodKey)}`,
+        schedule: { every: 'day', on: { hour: n.hour, minute: 0 } },
+      }))
+    })
+    return true
+  } catch { return false }
+}
+
+async function cancelPeakReminders() {
+  if (!CAP?.isNativePlatform?.()) return false
+  const L = CAP.Plugins?.LocalNotifications
+  if (!L?.cancel) return false
+  try {
+    await L.cancel({ notifications: PEAK_REMIND_NOTIFS.map(n => ({ id: n.id })) })
+    return true
+  } catch { return false }
+}
+
 /* ---------------- 视图切换 ---------------- */
 function showView(id) {
   for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-stats', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
@@ -1951,6 +2252,11 @@ function updateConn() {
   const el = $('conn-badge')
   el.textContent = ok ? t('conn.on') : t('conn.off')
   el.className = 'conn-badge ' + (ok ? 'on' : 'off')
+  const cur = state.servers.find(s => s.url === state.server)
+  const ms = state.serverLatency[state.server]
+  const curGroup = cur ? cur.group : state.activeGroup
+  const curLabel = cur ? (cur.note || cur.url) : (state.server || t('speed.origin'))
+  el.title = t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' })
 }
 
 function autosize(el) {
@@ -1970,7 +2276,9 @@ function applyPairUrl(url) {
     state.token = tok
     LS.set('token', tok)
     state.server = server
-    if (!state.servers.includes(server)) state.servers.unshift(server)
+    if (!state.servers.some(s => s.url === server)) {
+      state.servers.unshift({ id: newServerId(), url: server, note: '', group: state.activeGroup })
+    }
     saveServers()
     renderServers()
     $('token-desc').textContent = t('token.savedScan')
@@ -2188,6 +2496,11 @@ function bindUi() {
   })
   $('btn-server-speed').addEventListener('click', () => selectFastestServer({ silent: false }))
   $('btn-server-add').addEventListener('click', addServer)
+  $('btn-group-add').addEventListener('click', addGroup)
+  $('group-select-btn').addEventListener('click', (e) => { e.stopPropagation(); toggleGroupMenu() })
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#group-select')) closeGroupMenu()
+  })
   $('server-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addServer() }
   })
@@ -2214,6 +2527,25 @@ function bindUi() {
     }
     LS.set('notify', e.target.checked ? '1' : '0')
   })
+  $('opt-peak-remind').checked = peakRemindOn()
+  $('opt-peak-remind').addEventListener('change', async (e) => {
+    if (e.target.checked) {
+      if (!CAP?.isNativePlatform?.()) {
+        e.target.checked = false
+        return toast(t('peakRemind.browserOnly'), 'err')
+      }
+      const ok = await ensureNotify()
+      if (!ok) { e.target.checked = false; return toast(t('settings.notifyDenied')) }
+      await schedulePeakReminders()
+      toast(t('peakRemind.on'), 'ok')
+    } else {
+      await cancelPeakReminders()
+      toast(t('peakRemind.off'), 'ok')
+    }
+    LS.set('peakRemind', e.target.checked ? '1' : '0')
+  })
+  // 已开启则启动时重新调度, 防止系统清理后丢失
+  if (peakRemindOn() && CAP?.isNativePlatform?.()) schedulePeakReminders()
   $('opt-tools').checked = LS.get('showTools', '1') !== '0'
   $('opt-tools').addEventListener('change', (e) => {
     LS.set('showTools', e.target.checked ? '1' : '0')

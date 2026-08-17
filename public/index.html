@@ -7,6 +7,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>DSH Remote</title>
+  <script>/* 统一入口: 桌面浏览器(宽屏且 UA 非移动)访问根地址自动切换到桌面端, 手机/窄窗口继续 App 界面 */ (function(){try{var proto=location.protocol;var ua=navigator.userAgent||'';var mobile=/Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(ua);if((proto==='http:'||proto==='https:')&&!mobile&&window.innerWidth>=1024){var p=location.pathname;if(p==='/'||/\/index\.html$/.test(p)){location.replace('desktop/desktop.html'+location.search)}}}catch(e){}})()</script>
   <script>/* 首帧前应用皮肤, 避免闪白/闪黑 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -144,6 +145,16 @@
           <div><div class="setting-name" data-i18n="settings.servers">服务器地址（可多个）</div><div class="setting-desc" id="server-desc" data-i18n="servers.defaultDesc">默认 = 当前页面地址</div></div>
           <button id="btn-server-speed" class="mini-btn" data-i18n="settings.speedTest">测速</button>
         </div>
+        <div class="group-bar">
+          <label class="group-bar-label" data-i18n="groups.current">当前组</label>
+          <div class="group-select" id="group-select">
+            <button id="group-select-btn" class="group-select-btn" type="button" aria-haspopup="listbox">
+              <span id="group-select-label">默认</span><span class="caret">▾</span>
+            </button>
+            <div id="group-select-menu" class="group-select-menu hidden"></div>
+          </div>
+          <button id="btn-group-add" class="mini-btn" data-i18n="groups.add">+ 组</button>
+        </div>
         <div id="server-list" class="server-list"></div>
         <div class="server-add">
           <input id="server-input" type="url" placeholder="http://IP:8787">
@@ -156,6 +167,10 @@
         <div class="setting-row">
           <div><div class="setting-name" data-i18n="settings.notifyTitle">通知</div><div class="setting-desc" data-i18n="settings.notifyDesc">收到审批/提问时推送</div></div>
           <label class="switch"><input type="checkbox" id="opt-notify"><span class="slider"></span></label>
+        </div>
+        <div class="setting-row">
+          <div><div class="setting-name" data-i18n="settings.peakRemindTitle">峰谷计费提醒</div><div class="setting-desc" data-i18n="settings.peakRemindDesc">每天 9:00 / 12:00 / 14:00 / 18:00 推送峰谷切换（App 内有效）</div></div>
+          <label class="switch"><input type="checkbox" id="opt-peak-remind"><span class="slider"></span></label>
         </div>
         <div class="setting-row">
           <div><div class="setting-name" data-i18n="settings.toolsTitle">显示工具调用</div><div class="setting-desc" data-i18n="settings.toolsDesc">关闭后隐藏 🔧/📦 工具调用与结果</div></div>
@@ -267,6 +282,7 @@
       zh: {
         'a11y.hostAdmin': '主机管理', 'a11y.refresh': '刷新', 'a11y.more': '更多操作', 'a11y.moreTitle': '指令/权限/模型',
         'conn.on': '已连接', 'conn.off': '未连接', 'conn.reconnecting': '连接中断，正在重连…',
+        'conn.titleGroup': '{group} · {url}（{ms}）',
         'common.refreshing': '刷新中…',
         'nav.sessions': '会话', 'nav.files': '文件', 'nav.pending': '待办', 'nav.stats': '统计', 'nav.settings': '设置',
         'statsPage.title': 'Token 统计',
@@ -293,6 +309,18 @@
         'servers.currentDesc': '当前: {url}', 'servers.notSet': '未设置服务器', 'servers.defaultDesc': '默认 = 当前页面地址',
         'servers.needAddress': '请输入服务器地址', 'servers.badProtocol': '地址需以 http:// 或 https:// 开头',
         'servers.duplicate': '该地址已在列表中', 'servers.added': '已添加服务器', 'servers.removedActive': '已删除当前服务器，重新测速…',
+        'servers.currentDescGroup': '当前：{group} · {url}（{ms}）',
+        'servers.edit': '编辑', 'servers.manualSelected': '已切换至：{url}',
+        'servers.promptNote': '服务器备注（可留空）：', 'servers.promptEditNote': '编辑备注（{url}）：',
+        'servers.promptEditUrl': '编辑服务器地址：', 'servers.promptEditGroup': '所属组：', 'servers.edited': '服务器已更新',
+        'speed.switchedOrigin': '已切换到当前页面（同源）', 'speed.manualUsing': '手动模式：{url}（{ms}）',
+        'groups.current': '当前组', 'groups.add': '+ 组', 'groups.noServer': '组内暂无服务器',
+        'groups.speedTest': '测速', 'groups.autoSelect': '自动选择最快', 'groups.delete': '删除组',
+        'groups.autoOn': '{group} 已切换为自动选择', 'groups.autoOff': '{group} 已切换为手动选择',
+        'groups.switched': '已切换到组：{group}', 'groups.switchHint': '点击切换当前组，双击重命名', 'groups.promptAdd': '新组名：', 'groups.duplicate': '组名已存在',
+        'groups.added': '已创建组：{group}', 'groups.promptRename': '重命名组「{group}」：',
+        'groups.renamed': '组已重命名', 'groups.cannotDeleteDefault': '默认组不可删除',
+        'groups.confirmDelete': '删除组「{group}」？组内服务器将归入默认组。', 'groups.deleted': '组已删除',
         'stream.error': '事件流错误：{msg}',
         'session.loading': '加载中…', 'session.unknown': '未知会话', 'session.running': '运行中', 'session.interrupted': '已中断',
         'session.stop': '停止', 'session.history': '对话', 'session.errorMsg': '会话出错：{msg}',
@@ -368,6 +396,12 @@
         'settings.servers': '服务器地址（可多个）', 'settings.speedTest': '测速', 'settings.add': '添加',
         'settings.scanTitle': '扫码连接', 'settings.scanDesc': '拍照/相册本地解码（无谷歌服务依赖）；也可系统相机扫码或手动粘贴', 'settings.scan': '扫码',
         'settings.notifyTitle': '通知', 'settings.notifyDesc': '收到审批/提问时推送',
+        'settings.peakRemindTitle': '峰谷计费提醒', 'settings.peakRemindDesc': '每天 9:00 / 12:00 / 14:00 / 18:00 推送峰谷切换（App 内有效）',
+        'peakRemind.enterPeak': '已进入高峰计费时段', 'peakRemind.enterOff': '已进入空闲计费时段',
+        'peakRemind.peak0912': '高峰 9:00-12:00', 'peakRemind.off1214': '空闲 12:00-14:00',
+        'peakRemind.peak1418': '高峰 14:00-18:00', 'peakRemind.off1809': '空闲 18:00-次日 9:00',
+        'peakRemind.browserOnly': '峰谷提醒仅在 App 内有效',
+        'peakRemind.on': '峰谷提醒已开启', 'peakRemind.off': '峰谷提醒已关闭',
         'settings.toolsTitle': '显示工具调用', 'settings.toolsDesc': '关闭后隐藏 🔧/📦 工具调用与结果',
         'settings.langTitle': '语言 / Language', 'settings.langDesc': '界面语言，跟随系统或手动切换',
         'settings.themeTitle': '皮肤', 'settings.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔',
@@ -390,6 +424,7 @@
       en: {
         'a11y.hostAdmin': 'Host admin', 'a11y.refresh': 'Refresh', 'a11y.more': 'More actions', 'a11y.moreTitle': 'Commands / Permissions / Models',
         'conn.on': 'Connected', 'conn.off': 'Offline', 'conn.reconnecting': 'Connection lost, reconnecting…',
+        'conn.titleGroup': '{group} · {url} ({ms})',
         'common.refreshing': 'Refreshing…',
         'nav.sessions': 'Sessions', 'nav.files': 'Files', 'nav.pending': 'Inbox', 'nav.stats': 'Stats', 'nav.settings': 'Settings',
         'statsPage.title': 'Token stats',
@@ -416,6 +451,18 @@
         'servers.currentDesc': 'Current: {url}', 'servers.notSet': 'No server set', 'servers.defaultDesc': 'Default = current page URL',
         'servers.needAddress': 'Enter a server address', 'servers.badProtocol': 'Address must start with http:// or https://',
         'servers.duplicate': 'This address is already in the list', 'servers.added': 'Server added', 'servers.removedActive': 'Removed active server, re-testing…',
+        'servers.currentDescGroup': 'Current: {group} · {url} ({ms})',
+        'servers.edit': 'Edit', 'servers.manualSelected': 'Switched to: {url}',
+        'servers.promptNote': 'Server note (optional):', 'servers.promptEditNote': 'Edit note ({url}):',
+        'servers.promptEditUrl': 'Edit server URL:', 'servers.promptEditGroup': 'Group:', 'servers.edited': 'Server updated',
+        'speed.switchedOrigin': 'Switched to current page (same origin)', 'speed.manualUsing': 'Manual mode: {url} ({ms})',
+        'groups.current': 'Current group', 'groups.add': '+ Group', 'groups.noServer': 'No servers in this group',
+        'groups.speedTest': 'Speed test', 'groups.autoSelect': 'Auto-select fastest', 'groups.delete': 'Delete group',
+        'groups.autoOn': '{group} is now auto-select', 'groups.autoOff': '{group} is now manual',
+        'groups.switched': 'Switched to group: {group}', 'groups.switchHint': 'Click to switch group, double-click to rename', 'groups.promptAdd': 'New group name:', 'groups.duplicate': 'Group already exists',
+        'groups.added': 'Created group: {group}', 'groups.promptRename': 'Rename group "{group}":',
+        'groups.renamed': 'Group renamed', 'groups.cannotDeleteDefault': 'The default group cannot be deleted',
+        'groups.confirmDelete': 'Delete group "{group}"? Its servers move to the default group.', 'groups.deleted': 'Group deleted',
         'stream.error': 'Event stream error: {msg}',
         'session.loading': 'Loading…', 'session.unknown': 'Unknown session', 'session.running': 'Running', 'session.interrupted': 'Interrupted',
         'session.stop': 'Stop', 'session.history': 'Conversation', 'session.errorMsg': 'Session error: {msg}',
@@ -491,6 +538,12 @@
         'settings.servers': 'Servers (one or more)', 'settings.speedTest': 'Test', 'settings.add': 'Add',
         'settings.scanTitle': 'Scan to pair', 'settings.scanDesc': 'Photo/gallery QR decoding on device (no Google services); system camera or manual paste also work', 'settings.scan': 'Scan',
         'settings.notifyTitle': 'Notifications', 'settings.notifyDesc': 'Push on approvals / questions',
+        'settings.peakRemindTitle': 'Peak/off-peak reminders', 'settings.peakRemindDesc': 'Push at 9:00 / 12:00 / 14:00 / 18:00 daily (in-app only)',
+        'peakRemind.enterPeak': 'Peak pricing period started', 'peakRemind.enterOff': 'Off-peak pricing period started',
+        'peakRemind.peak0912': 'Peak 9:00-12:00', 'peakRemind.off1214': 'Off-peak 12:00-14:00',
+        'peakRemind.peak1418': 'Peak 14:00-18:00', 'peakRemind.off1809': 'Off-peak 18:00-9:00 next day',
+        'peakRemind.browserOnly': 'Peak reminders only work in the app',
+        'peakRemind.on': 'Peak reminders enabled', 'peakRemind.off': 'Peak reminders disabled',
         'settings.toolsTitle': 'Show tool calls', 'settings.toolsDesc': 'Hide 🔧/📦 tool calls and results when off',
         'settings.langTitle': 'Language / 语言', 'settings.langDesc': 'UI language, follows system or switch manually',
         'settings.themeTitle': 'Theme', 'settings.themeDesc': 'Default deep space / Sunset / Elbphilharmonie / Prairie Tower',
