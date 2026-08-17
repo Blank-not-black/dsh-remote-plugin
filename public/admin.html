@@ -20,7 +20,16 @@
     .stat-card.ok .v { color: var(--dsr-success); } .stat-card.warn .v { color: var(--dsr-warning); }
     .stats-dash { margin-bottom: 14px; }
     .stats-dash .stat-grid { margin-bottom: 8px; }
-    .stats-chart { display: flex; align-items: flex-end; gap: 8px; height: 150px; padding: 12px 14px 10px; background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); overflow-x: auto; overflow-y: hidden; }
+    .stats-chart { display: flex; align-items: flex-end; gap: 8px; height: 180px; padding: 12px 14px 10px; background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); overflow-x: auto; overflow-y: hidden; }
+    .stats-legend { display: flex; gap: 12px; font-size: 11px; color: var(--dsr-muted); margin: 6px 2px 0; }
+    .stats-legend .lg { display: inline-flex; align-items: center; gap: 4px; }
+    .stats-legend .sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+    .stats-legend .sw.peak { background: var(--dsr-accent-strong); }
+    .stats-legend .sw.off { background: var(--dsr-accent-2); }
+    .bucket-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px; margin-top: 6px; }
+    .bucket-grid .b { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 11px; min-width: 0; }
+    .bucket-grid .b .n { color: var(--dsr-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bucket-grid .b .t { font-weight: 600; white-space: nowrap; }
     .stats-bar { flex: 1; min-width: 38px; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 5px; }
     .stats-bar .bars { width: 100%; max-width: 46px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; border-radius: 6px 6px 0 0; overflow: hidden; background: var(--dsr-accent-soft); }
     .stats-bar .seg { width: 100%; }
@@ -29,6 +38,7 @@
     .stats-bar .lbl { font-size: 10px; color: var(--dsr-muted); white-space: nowrap; }
     .stats-bar .val { font-size: 10px; color: var(--dsr-text); white-space: nowrap; }
     .stats-empty { color: var(--dsr-muted); text-align: center; padding: 20px 0; font-size: 12px; }
+    .stats-note { color: var(--dsr-muted); font-size: 11px; line-height: 1.6; margin-top: 8px; }
     .table-wrap { background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 0; }
     th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--dsr-line); vertical-align: top; }
@@ -158,7 +168,9 @@
       <div class="stats-dash">
         <div class="section-head"><span data-i18n="stats.title">Token 统计</span><span id="stats-sub" class="muted"></span></div>
         <div class="stat-grid" id="stats-cards"></div>
+        <div id="stats-legend" class="stats-legend"></div>
         <div id="stats-chart" class="stats-chart"></div>
+        <div id="stats-note" class="stats-note"></div>
       </div>
 
       <div class="section-head"><span data-i18n="devices">已连接设备</span><span id="device-summary" class="muted"></span></div>
@@ -237,6 +249,7 @@
         'stats.peak': '高峰', 'stats.off': '空闲',
         'stats.days': '近 {n} 天',
         'stats.gatewayDown': '统计需要 8787 网关运行', 'stats.empty': '暂无统计，产生会话后自动聚合',
+        'stats.note': '注：本数据仅在使用 DeepSeek 官方 API 时估算；基于 token 计算，与官网账单可能有出入，一切以官网为准。统计自 2026-08-17 定价生效日起。',
         'unit.sec': ' 秒', 'unit.min': ' 分钟', 'unit.hour': ' 小时 ', 'unit.minShort': ' 分', 'unit.day': ' 天 ',
         'device.installedNotRunning': '网关已安装 · 当前未运行', 'device.noGatewayBinary': '未检测到网关程序',
         'device.ipRefresh': '{n} 个 IP · 每 5 秒刷新',
@@ -308,6 +321,7 @@
         'stats.peak': 'Peak', 'stats.off': 'Off-peak',
         'stats.days': 'Last {n} days',
         'stats.gatewayDown': 'Stats require the gateway on 8787', 'stats.empty': 'No stats yet — they aggregate as sessions happen',
+        'stats.note': 'Note: estimates assume the official DeepSeek API. Token-based calculation may differ from the official bill; always defer to deepseek.com. Stats start from the 2026-08-17 pricing date.',
         'unit.sec': 's', 'unit.min': 'min', 'unit.hour': 'h ', 'unit.minShort': 'm', 'unit.day': 'd ',
         'device.installedNotRunning': 'Gateway installed · not running', 'device.noGatewayBinary': 'Gateway binary not found',
         'device.ipRefresh': '{n} IPs · refreshed every 5s',
